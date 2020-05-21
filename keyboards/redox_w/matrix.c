@@ -18,6 +18,7 @@
 #if defined(__AVR__)
 #include <avr/io.h>
 #endif
+#include "i2c_master.h"
 #include "wait.h"
 #include "print.h"
 #include "debug.h"
@@ -44,6 +45,15 @@
 
 /* matrix state(1:on, 0:off) */
 static matrix_row_t matrix[MATRIX_ROWS];
+
+// TODO: set this based on a compiler flag? see what QMK has in this regard...
+// TODO: maybe make this a compile-time switch instead, so no enum, fully
+//       preprocessor
+/* enum to indicate if this is the wired controller or the wireless receiver */
+enum WiredOrWireless {WIRED, WIRELESS};
+static enum WiredOrWireless wired_or_wireless = WIRED;
+#define WIRED_I2C_SLAVE_ADDRESS (0x18 << 1)
+#define WIRED_I2C_MASTER_ADDRESS (0x19 << 1)
 
 __attribute__ ((weak))
 void matrix_init_quantum(void) {
@@ -88,7 +98,66 @@ void matrix_init(void) {
     matrix_init_quantum();
 }
 
-uint8_t matrix_scan(void)
+// TODO: lots of duplication between the wired and wireless functions below...
+uint8_t matrix_scan_wired(void)
+{
+    print("matrix_scan_wired called");
+
+    i2c_init();
+    i2c_status_t status;
+
+    // Request the matrix from the i2c slave
+    static const uint16_t matrix_request_timeout = 1000;
+    #define matrix_request_data_size 1
+    uint8_t matrix_request_data[matrix_request_data_size] = {'s'};
+    status = i2c_transmit(
+            WIRED_I2C_SLAVE_ADDRESS, 
+            matrix_request_data, 
+            matrix_request_data_size, 
+            matrix_request_timeout);
+
+    // If we failed to send then we can't do anything else
+    if (status != I2C_STATUS_SUCCESS){
+        // TODO: is there anything QMK specific stuff we have to do here?
+        //       what about the return code?
+        return 0;
+    }
+
+    // Receive the matrix from the i2c slave
+    static const uint16_t matrix_receive_timeout = 1000;
+    #define matrix_receive_data_size 11
+    uint8_t matrix_receive_data[matrix_receive_data_size] = {0};
+    status = i2c_receive(
+            WIRED_I2C_MASTER_ADDRESS, 
+            matrix_receive_data, 
+            matrix_receive_data_size,
+            matrix_receive_timeout);
+
+    // If we failed to receive then we can't do anything else
+    if (status != I2C_STATUS_SUCCESS){
+        // TODO: is there anything QMK specific stuff we have to do here?
+        //       what about the return code?
+        return 0;
+    }
+
+    //check for the end packet, the key state bytes use the LSBs, so 0xE0
+    //will only show up here if the correct bytes were recieved
+    if (matrix_receive_data[10] == 0xE0)
+    {
+        //shifting and transferring the keystates to the QMK matrix variable
+        for (uint8_t i = 0; i < MATRIX_ROWS; i++) {
+            matrix[i] = (uint16_t) matrix_receive_data[i*2] | (uint16_t) matrix_receive_data[i*2+1] << 7;
+            matrix[i] = 1;
+        }
+
+        // TODO: properly handle this case??
+    }
+
+    matrix_scan_quantum();
+    return 1;
+}
+
+uint8_t matrix_scan_wireless(void)
 {
     SERIAL_UART_INIT();
 
@@ -128,6 +197,23 @@ uint8_t matrix_scan(void)
     matrix_scan_quantum();
     return 1;
 }
+
+uint8_t matrix_scan(void)
+{
+    switch (wired_or_wireless) {
+        case (WIRELESS):
+            return matrix_scan_wireless();
+            break;
+        case (WIRED):
+            return matrix_scan_wired();
+            break;
+    }
+
+    // TODO: properly handle this (ideally it's not even possible if we make
+    //       the wired/wireless switch compile-time)
+    return 1;
+}
+
 
 inline
 bool matrix_is_on(uint8_t row, uint8_t col)

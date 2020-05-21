@@ -33,6 +33,7 @@ USB = /dev/ttyACM0
 OPT_DEFS += -DREDOX_W_PROMICRO
 INTERPHASE_UPLOAD_COMMAND = while [ ! -r $(USB) ]; do sleep 1; done; \
                          avrdude -p $(MCU) -c avr109 -U flash:w:$(TARGET).hex -P $(USB)
+QUANTUM_LIB_SRC += i2c_master.c
 
 # # project specific files
 SRC = matrix.c
